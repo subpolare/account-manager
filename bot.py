@@ -1,76 +1,119 @@
-import os
-import logging
-from zoneinfo import ZoneInfo
-from datetime import datetime
-import time
+from datetime import time as dtime
 from dotenv import load_dotenv
-import telebot
-from telebot import apihelper
-from apscheduler.schedulers.background import BackgroundScheduler
-from requests.exceptions import RequestException, ReadTimeout, ConnectTimeout
-from apscheduler.triggers.cron import CronTrigger
+from zoneinfo import ZoneInfo
+import asyncio, logging, os
 
-from digest import generate_digest
+from telegram import Update
+from telegram.constants import ChatAction, ParseMode
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    Defaults,
+)
 
-apihelper.CONNECT_TIMEOUT = 15
-apihelper.READ_TIMEOUT = 60
-
-logging.basicConfig(level = logging.INFO)
-TZ = 'Europe/Moscow'
+from functions.digest import generate_digest
 
 load_dotenv()
-TOKEN = os.getenv('TELEGRAM_TOKEN')
+BOT_TOKEN      = os.getenv('TELEGRAM_TOKEN')
+TZ             = os.getenv('TZ', 'Europe/Moscow')
 DIGEST_CHAT_ID = os.getenv('DIGEST_CHAT_ID')
 
-bot = telebot.TeleBot(TOKEN, parse_mode = 'HTML')
+logging.basicConfig(
+    format = '%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+    level  = logging.INFO,
+)
+logger = logging.getLogger('bot')
+MAX_CHUNK = 3500
 
-def send_with_retry(chat_id, text, attempts = 3):
-    for i in range(1, attempts + 1):
+
+def chunk_text(text: str, size: int = MAX_CHUNK):
+    for i in range(0, len(text), size):
+        yield text[i : i + size]
+
+
+async def send_long_message(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int | str, text: str):
+    for part in chunk_text(text):
         try:
-            bot.send_message(chat_id, text, disable_web_page_preview = True, timeout = 60, parse_mode = 'Markdown')
-            return
-        except (ReadTimeout, ConnectTimeout, RequestException) as e:
-            if i == attempts:
+            await ctx.bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await ctx.bot.send_message(
+                chat_id                  = chat_id,
+                text                     = part,
+                disable_web_page_preview = True,
+                parse_mode               = 'Markdown',
+            )
+        except Exception:
+            logger.exception('send_long_message: failed to send chunk')
+            try:
+                await ctx.bot.send_message(chat_id=chat_id, text=part, parse_mode=None)
+            except Exception:
+                logger.exception('send_long_message: fallback also failed')
                 raise
-            time.sleep(2 ** i)
 
-def send_long_message(chat_id, text):
-    limit = 4000
-    if len(text) <= limit:
-        send_with_retry(chat_id, text)
-        return
-    start = 0
-    while start < len(text):
-        send_with_retry(chat_id, text[start:start + limit])
-        start += limit
-
-def job_send_digest():
+async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        digest = generate_digest()
-        timestamp = datetime.now(ZoneInfo(TZ)).strftime('%Y-%m-%d %H:%M')
-        logging.info('digest @ %s: %d chars', timestamp, len(digest))
-        send_long_message(DIGEST_CHAT_ID, digest)
+        digest = await asyncio.to_thread(generate_digest)
+        await send_long_message(context, update.effective_chat.id, digest)
     except Exception as e:
-        logging.exception('digest job failed: %s', e)
-        bot.send_message(DIGEST_CHAT_ID, f'⚠️ Ошибка при генерации дайджеста: {e}')
+        logger.exception('/digest failed: %s', e)
+        await update.message.reply_html(f'⚠️ Ошибка: <code>{e}</code>')
 
-@bot.message_handler(commands = ['digest'])
-def cmd_digest(message):
+async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_html(f'chat_id: <code>{update.effective_chat.id}</code>')
+
+async def job_send_digest(context: ContextTypes.DEFAULT_TYPE):
     try:
-        digest = generate_digest()
-        send_long_message(message.chat.id, digest)
+        digest = await asyncio.to_thread(generate_digest)
+        ts_tz = ZoneInfo(TZ)
+        logger.info('digest: len = %d tz = %s', len(digest), ts_tz.key)
+        await send_long_message(context, DIGEST_CHAT_ID, digest)
     except Exception as e:
-        logging.exception('/digest failed: %s', e)
-        bot.reply_to(message, f'⚠️ Ошибка: {e}')
+        logger.exception('digest job failed: %s', e)
+        try:
+            await context.bot.send_message(DIGEST_CHAT_ID, f'⚠️ Ошибка при генерации дайджеста: {e}')
+        except Exception:
+            logger.exception('failed to notify about digest failure')
 
-@bot.message_handler(commands = ['id'])
-def cmd_id(message):
-    bot.reply_to(message, f'chat_id: <code>{message.chat.id}</code>')
+async def on_startup(app: Application):
+    logger.info('Bot started, timezone = %s', TZ)
 
-sched = BackgroundScheduler(timezone = TZ)
-sched.add_job(job_send_digest, CronTrigger(hour = 9, minute = 0))
-sched.start()
+
+def build_app() -> Application:
+    if not BOT_TOKEN:
+        raise RuntimeError('Не задан BOT_TOKEN в окружении')
+
+    defaults = Defaults(parse_mode=ParseMode.HTML, tzinfo=ZoneInfo(TZ))
+
+    application = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .defaults(defaults)
+        .post_init(on_startup)
+        .build()
+    )
+
+    application.add_handler(CommandHandler('digest', cmd_digest))
+    application.add_handler(CommandHandler('id', cmd_id))
+
+    if DIGEST_CHAT_ID:
+        application.job_queue.run_daily(
+            job_send_digest,
+            time = dtime(hour = 9, minute = 0, tzinfo = ZoneInfo(TZ)),
+            name = 'daily_digest',
+        )
+        logger.info('Job scheduled: 09:00 %s -> chat %s', TZ, DIGEST_CHAT_ID)
+    else:
+        logger.warning('DIGEST_CHAT_ID не задан — ежедневный дайджест отключён')
+
+    async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+        logger.exception('Unhandled error: %s', context.error)
+
+    application.add_error_handler(on_error)
+    application.post_init(on_startup)
+
+    return application
 
 if __name__ == '__main__':
-    logging.info('Bot started, timezone = %s', TZ)
-    bot.infinity_polling(skip_pending = True)
+    app = build_app()
+    app.run_polling(allowed_updates = Update.ALL_TYPES, drop_pending_updates=True)
