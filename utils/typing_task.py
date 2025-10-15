@@ -11,4 +11,4 @@ def keep_typing(func):
             action  = ChatAction.TYPING
         )
         return await func(update, context, *args, **kwargs)
-    return command_func
+    return command_func 
