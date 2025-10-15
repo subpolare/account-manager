@@ -13,6 +13,7 @@ from telegram.ext import (
     Defaults,
 )
 
+from functions.stat import cmd_stat
 from functions.digest import generate_digest
 from utils.typing_task import keep_typing
 
@@ -95,6 +96,7 @@ def build_app() -> Application:
     )
 
     application.add_handler(CommandHandler('digest', cmd_digest))
+    application.add_handler(CommandHandler('stat', cmd_stat))
     application.add_handler(CommandHandler('id', cmd_id))
 
     if DIGEST_CHAT_ID:
