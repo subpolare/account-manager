@@ -2,7 +2,9 @@
   <h1>Account and time-manager for social networks</h1> 
 </div>
 
-### 🏗️ How to build
+I made this bot for my own purposes, so it's not really adapted to run on other people's servers. But since I don't have much memory, I personally use systemmd for this purpose with a prepared directory in which I just update the scripts and restart the process. Yes, in the old days,
+
+### 🏗️ How to rebuild (only for me)
 
 1. Prepare the directory and clone the repo 
 
