@@ -111,7 +111,6 @@ def build_app() -> Application:
         logger.exception('Unhandled error: %s', context.error)
 
     application.add_error_handler(on_error)
-    application.post_init(on_startup)
 
     return application
 
