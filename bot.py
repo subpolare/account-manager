@@ -14,6 +14,7 @@ from telegram.ext import (
 )
 
 from functions.digest import generate_digest
+from utils.typing_task import keep_typing
 
 load_dotenv()
 BOT_TOKEN      = os.getenv('TELEGRAM_TOKEN')
@@ -31,7 +32,6 @@ MAX_CHUNK = 3500
 def chunk_text(text: str, size: int = MAX_CHUNK):
     for i in range(0, len(text), size):
         yield text[i : i + size]
-
 
 async def send_long_message(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int | str, text: str):
     for part in chunk_text(text):
@@ -51,6 +51,7 @@ async def send_long_message(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int | str, 
                 logger.exception('send_long_message: fallback also failed')
                 raise
 
+@keep_typing
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         digest = await asyncio.to_thread(generate_digest)
@@ -59,6 +60,7 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception('/digest failed: %s', e)
         await update.message.reply_html(f'⚠️ Ошибка: <code>{e}</code>')
 
+@keep_typing
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(f'chat_id: <code>{update.effective_chat.id}</code>')
 
@@ -77,7 +79,6 @@ async def job_send_digest(context: ContextTypes.DEFAULT_TYPE):
 
 async def on_startup(app: Application):
     logger.info('Bot started, timezone = %s', TZ)
-
 
 def build_app() -> Application:
     if not BOT_TOKEN:
