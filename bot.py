@@ -65,6 +65,7 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(f'chat_id: <code>{update.effective_chat.id}</code>')
 
+@keep_typing
 async def job_send_digest(context: ContextTypes.DEFAULT_TYPE):
     try:
         digest = await asyncio.to_thread(generate_digest)
