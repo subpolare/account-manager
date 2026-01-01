@@ -74,7 +74,8 @@ def batch_read_cells(sheet, row: int, platforms) -> List[str]:
 def get_worksheet():
     scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
     creds = Credentials.from_service_account_file('service_account.json', scopes = scopes)
-    return gspread.authorize(creds).open_by_key(SHEET_KEY).sheet1
+    sh = gspread.authorize(creds).open_by_key(SHEET_KEY)
+    return sh.worksheet('2026')
 
 def get_today_items(now: Optional[datetime] = None) -> Optional[List[Tuple[str, str]]]:
     sheet = get_worksheet()
